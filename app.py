@@ -1,7 +1,8 @@
 import os
 import sqlite3
 from flask import Flask, jsonify, request
-
+import logging
+from auth import utilisateur_connecte
 app = Flask(__name__)
 DB = "notes.db"
 
@@ -49,6 +50,39 @@ def lister_notes():
         [{"id": r[0], "etudiant": r[1], "module": r[2], "note": r[3]} for r in rows]
     )
 
+# Modification d'une note par l'enseignant
+@app.route("/notes/<int:note_id>", methods=["PUT"])
+def modifier_note(note_id):
+    utilisateur = utilisateur_connecte()
+    if utilisateur is None:
+        return jsonify({"erreur": "Non identifié"}), 401
+    if utilisateur["role"] != "enseignant":
+        return jsonify({"erreur": "Accès refusé"}), 403
+
+    donnees = request.get_json(silent=True) or {}
+    note = donnees.get("note")
+    if (isinstance(note, bool) or not isinstance(note, (int, float))
+            or not 0 <= note <= 20):
+        return jsonify({"erreur": "Note invalide"}), 400
+
+    try:
+        with sqlite3.connect(DB) as con:
+            ligne = con.execute(
+                "SELECT module FROM notes WHERE id = ?", (note_id,)
+            ).fetchone()
+            if ligne is None:
+                return jsonify({"erreur": "Note introuvable"}), 404
+            if ligne[0] != utilisateur["module"]:
+                return jsonify({"erreur": "Accès refusé"}), 403
+            con.execute(
+                "UPDATE notes SET note = ? WHERE id = ?", (note, note_id)
+            )
+        logging.info("Note %s modifiée par %s", note_id, utilisateur["nom"])
+        return jsonify({"statut": "ok"}), 200
+    except sqlite3.Error:
+        return jsonify({"erreur": "Erreur interne"}), 500
 
 if __name__ == "__main__":
     app.run(host=os.environ.get("APP_HOST", "127.0.0.1"), port=5000)
+
+    
